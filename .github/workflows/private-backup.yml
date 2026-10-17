@@ -41,3 +41,14 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "Update private Daily CS backup ${HASH}"
           git push
+      - name: Report successful private backup
+        env:
+          DAILY_CS_BACKUP_API_URL: ${{ secrets.DAILY_CS_BACKUP_API_URL }}
+          DAILY_CS_BACKUP_API_KEY: ${{ secrets.DAILY_CS_BACKUP_API_KEY }}
+        run: node scripts/report-backup.js success
+      - name: Report failed private backup
+        if: ${{ failure() }}
+        env:
+          DAILY_CS_BACKUP_API_URL: ${{ secrets.DAILY_CS_BACKUP_API_URL }}
+          DAILY_CS_BACKUP_API_KEY: ${{ secrets.DAILY_CS_BACKUP_API_KEY }}
+        run: node scripts/report-backup.js failure

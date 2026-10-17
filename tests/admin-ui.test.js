@@ -20,6 +20,7 @@ const lessons = Array.from({ length: 365 }, (_, index) => ({
 const settings = { ownerUid: "synthetic-private-uid", startDate: "2026-09-15", sendTime: "09:35", timezone: "Asia/Seoul", revision: 2, scheduleRevision: 3, mailPaused: false };
 const today = { date: "2026-10-17", status: "frozen", title: "오늘 합성 글", lessonId: lessons[1].id, document: { answer: "PRIVATE_BODY_SENTINEL" } };
 const tomorrow = { date: "2026-10-18", status: "scheduled", title: "내일 합성 글", lessonId: lessons[2].id };
+const operations = { mailLastSeenAt: "2026-10-17T05:00:00Z", backupLatest: { runId: "123456", status: "success", reportedAt: "2026-10-17T04:00:00Z" }, backupLastSuccessAt: "2026-10-17T04:00:00Z", backupLastFailureAt: "2026-10-16T04:00:00Z" };
 let browser, server, origin, appBundle;
 
 test.before(async () => {
@@ -62,7 +63,7 @@ async function openApp(t) {
     const { action, payload } = route.request().postDataJSON();
     requests.push({ action, payload });
     const responses = {
-      "dashboard.get": { settings, counts: { draft: 1, published: 364, trash: 0, queuedMail: 2, uncertainMail: 1 }, today, tomorrow },
+      "dashboard.get": { settings, counts: { draft: 1, published: 364, trash: 0, queuedMail: 2, uncertainMail: 1 }, today, tomorrow, operations },
       "lesson.list": { items: lessons },
       "settings.get": settings,
       "schedule.get": { days: [today, tomorrow], scheduleRevision: 3 },
@@ -190,6 +191,51 @@ test("logout clears rendered dashboard and account data", async t => {
   assert.equal(await page.locator("#account-output").textContent(), "");
   assert.equal(await page.locator("#dashboard-summary").textContent(), "");
   assert.equal(await page.locator("#schedule-override-lesson-id option").count(), 1);
+});
+
+test("operations shows reported backup and poller health with the previous fourteen mail days", async t => {
+  // Given actual persisted operation summaries are present in dashboard.get.
+  const { page, requests } = await openApp(t);
+  await page.locator('[data-view="ops"]').click();
+  // When the operations view is read.
+  const health = await page.locator("#operations-health").textContent({ timeout: 1500 });
+  // Then connection and backup history use those summaries, and mail range ends today.
+  assert.match(health, /메일 폴러/);
+  assert.match(health, /최근 백업.*성공/);
+  assert.match(health, /마지막 성공/);
+  assert.match(health, /마지막 실패/);
+  assert.equal(await page.locator("#operations-health a").getAttribute("href"), "https://github.com/donggeonha/Daily_CS-archive/actions/runs/123456");
+  const payload = requests.find(item => item.action === "mail.status").payload;
+  const expectedFrom = await page.evaluate(() => { const day = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Seoul" })); day.setDate(day.getDate() - 13); return `${day.getFullYear()}-${String(day.getMonth()+1).padStart(2,"0")}-${String(day.getDate()).padStart(2,"0")}`; });
+  assert.deepEqual(payload, { from: expectedFrom, days: 14 });
+});
+
+test("logout wipes private inputs and rejects a reader response that arrives afterward", async t => {
+  // Given private drafts are in the form and a reader request is in flight.
+  const { page } = await openApp(t);
+  await page.locator("#reader-status").filter({ hasText: "스냅샷이 없습니다" }).waitFor();
+  await page.evaluate(() => { for (const id of ["editor-title", "editor-answer", "editor-markdown", "import-json", "reader-search"]) document.getElementById(id).value = "PRIVATE_FORM_SENTINEL"; });
+  let release;
+  let started;
+  const pending = new Promise(resolve => { release = resolve; });
+  const received = new Promise(resolve => { started = resolve; });
+  await page.route("**/functions/v1/owner-api", async route => {
+    if (route.request().postDataJSON().action !== "reader.today") return route.fallback();
+    started();
+    await pending;
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ data: { day: { date: "2026-10-17", lessonId: lessons[0].id, title: "PRIVATE_RESPONSE_SENTINEL", documentKind: "markdown", document: { markdown: "PRIVATE_RESPONSE_SENTINEL" } } } }) });
+  });
+  await page.locator("#reader-today").click();
+  await received;
+  // When logout precedes response completion.
+  await page.locator("#local-logout").click();
+  release();
+  await page.waitForResponse(response => response.url().endsWith("owner-api") && response.request().postDataJSON().action === "reader.today");
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  // Then neither the old form nor the delayed response contains private content.
+  const retained = await page.evaluate(() => ({ text: document.body.textContent, values: [...document.querySelectorAll("input,textarea")].map(node => node.value).join(" ") }));
+  assert.doesNotMatch(retained.text + retained.values, /PRIVATE_FORM_SENTINEL|PRIVATE_RESPONSE_SENTINEL/);
+  assert.equal(await page.locator("#workspace").isVisible(), false);
 });
 
 test("operations and admin controls fit mobile, tablet and desktop", async t => {

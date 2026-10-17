@@ -35,6 +35,10 @@ select set_config('request.jwt.claim.sub','11111111-1111-1111-1111-111111111111'
 select set_config('request.jwt.claims','{"session_id":"22222222-2222-2222-2222-222222222222"}',false);
 `;
 
+test('backup reporting keeps success terminal and rejects unscoped or content-bearing reports', () => {
+  sql(fs.readFileSync(path.join(__dirname, 'operations-health.sql'), 'utf8'));
+});
+
 function owner(action, payload = {}) {
   const escaped = JSON.stringify(payload).replace(/'/g, "''");
   const output = sql(`${ownerSession} set role authenticated;

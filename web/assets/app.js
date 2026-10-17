@@ -22,6 +22,7 @@ import {
 const state = {
   api: null,
   auth: null,
+  authGeneration: 0,
   cleanupRefresh: null,
   dashboard: null,
   importPreview: null,
@@ -64,7 +65,7 @@ function bindNodes() {
     "schedule-override", "schedule-override-lesson-id", "schedule-override-date", "schedule-override-mode",
     "schedule-revision", "mail-paused", "save-schedule", "save-override", "rebuild-schedule", "send-test-mail",
     "ops-status", "export-json", "backup-json", "restore-backup", "import-json", "preview-import",
-    "commit-import", "import-expected-hash", "json-output", "log-output", "account-output", "dashboard-summary"
+    "commit-import", "import-expected-hash", "json-output", "log-output", "account-output", "dashboard-summary", "operations-health"
   ]) {
     nodes[toKey(id)] = document.getElementById(id);
   }
@@ -180,7 +181,10 @@ async function configureProductionApp() {
       return;
     }
     state.session = session;
-    state.cleanupRefresh = startSessionRefresh(state.auth, onSessionRefresh);
+    const generation = state.authGeneration;
+    state.cleanupRefresh = startSessionRefresh(state.auth, (session, error) => {
+      if (generation === state.authGeneration) onSessionRefresh(session, error);
+    });
     await verifyOwnerAndEnter();
   } catch (error) {
     showAuth(authMessage(error), "error");
@@ -547,7 +551,7 @@ async function refreshOps() {
   const [settingsData, dashboard, mailData] = await Promise.all([
     owner(ACTIONS.settingsGet, {}),
     owner(ACTIONS.dashboardGet, {}),
-    owner(ACTIONS.mailStatus, { from: todayKey(), days: 14 })
+    owner(ACTIONS.mailStatus, { from: todayKey(-13), days: 14 })
   ]);
   state.settings = normalizeSettings(settingsData, state.settings);
   state.dashboard = dashboard;
@@ -570,6 +574,22 @@ function renderOps(settingsData, dashboard, mailData) {
     ...[["오늘", dashboard.today], ["내일", dashboard.tomorrow]].map(([label, day]) =>
       textBlock(`${label} · ${day?.date ?? ""} · ${day?.title ?? "학습글 없음"} · ${statusLabels[day?.status] ?? "상태 확인 중"}`))
   );
+  const health = dashboard.operations ?? {};
+  const formatTime = (value) => value ? new Date(value).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" }) : "기록 없음";
+  const backup = health.backupLatest;
+  nodes.operationsHealth.replaceChildren(
+    textBlock(`메일 폴러 · 마지막 응답: ${formatTime(health.mailLastSeenAt)}`),
+    textBlock(`최근 백업: ${backup ? (backup.status === "success" ? "성공" : "실패") : "기록 없음"} · ${formatTime(backup?.reportedAt)}`),
+    textBlock(`마지막 성공: ${formatTime(health.backupLastSuccessAt)} · 마지막 실패: ${formatTime(health.backupLastFailureAt)}`)
+  );
+  if (backup && /^[0-9]{1,30}$/.test(backup.runId)) {
+    const link = document.createElement("a");
+    link.href = `https://github.com/donggeonha/Daily_CS-archive/actions/runs/${backup.runId}`;
+    link.textContent = "비공개 백업 실행 기록";
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    nodes.operationsHealth.append(link);
+  }
   nodes.accountOutput.replaceChildren(
     textBlock(`계정: ${state.session?.user?.email ?? "로그인됨"}`),
     textBlock(`시간대: ${settings.timezone ?? "Asia/Seoul"}`),
@@ -764,10 +784,13 @@ function draftDocumentFromEditor() {
 }
 
 async function owner(action, payload) {
+  const generation = state.authGeneration;
   try {
-    return await state.api.action(action, payload);
+    const data = await state.api.action(action, payload);
+    if (generation !== state.authGeneration) throw new DailyCsApiError("session_changed", "세션이 변경되었습니다.", 409);
+    return data;
   } catch (error) {
-    if (error instanceof DailyCsApiError && (error.status === 401 || error.status === 403)) {
+    if (generation === state.authGeneration && error instanceof DailyCsApiError && (error.status === 401 || error.status === 403)) {
       clearSensitiveMemory();
       failClosed();
     }
@@ -776,22 +799,26 @@ async function owner(action, payload) {
 }
 
 async function getAccessToken() {
+  if (!state.session) return "";
+  const generation = state.authGeneration;
   const session = await getVerifiedSession(state.auth);
+  if (generation !== state.authGeneration) return "";
   state.session = session;
   return session?.access_token ?? "";
 }
 
 async function signOutAndReset(scope) {
+  clearSensitiveMemory();
+  failClosed();
   try {
     if (state.auth) await signOut(state.auth, scope);
   } finally {
-    clearSensitiveMemory();
-    failClosed();
     showAuth(scope === "global" ? "전체 세션에서 로그아웃했습니다." : "이 브라우저에서 로그아웃했습니다.", "info");
   }
 }
 
 function clearSensitiveMemory() {
+  state.authGeneration += 1;
   state.cleanupRefresh?.();
   state.dashboard = null;
   state.importPreview = null;
@@ -809,9 +836,17 @@ function clearSensitiveMemory() {
   nodes.historyOutput.replaceChildren();
   nodes.jsonOutput.textContent = "";
   nodes.dashboardSummary.replaceChildren();
+  nodes.operationsHealth.replaceChildren();
   nodes.accountOutput.replaceChildren();
   nodes.logOutput.replaceChildren();
   setOptions(nodes.scheduleOverride, [["", "게시된 글 선택"]]);
+  nodes.editorForm.reset();
+  for (const input of [nodes.importJson, nodes.importExpectedHash, nodes.readerSearch, nodes.readerDate, nodes.adminSearch]) input.value = "";
+  nodes.diffOutput.textContent = "";
+  nodes.revisionSelect.replaceChildren();
+  nodes.sessionLabel.textContent = "로그아웃됨";
+  nodes.editorLock.textContent = "선택 없음";
+  nodes.editorStatus.textContent = "";
 }
 
 function failClosed() {
@@ -1026,15 +1061,14 @@ function revisionDiffText(current, previous) {
     .join("\n");
 }
 
-function todayKey() {
+function todayKey(offset = 0) {
   const korea = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Seoul" }));
+  korea.setDate(korea.getDate() + offset);
   return `${korea.getFullYear()}-${String(korea.getMonth() + 1).padStart(2, "0")}-${String(korea.getDate()).padStart(2, "0")}`;
 }
 
 function tomorrowKey() {
-  const [year, month, day] = todayKey().split("-").map(Number);
-  const date = new Date(year, month - 1, day + 1);
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  return todayKey(1);
 }
 
 function debounce(callback, delay) {

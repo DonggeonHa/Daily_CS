@@ -98,6 +98,10 @@ Deno.serve(async (request: Request): Promise<Response> => {
     return json(origin, { error: { code: "bad_request", message: "invalid action envelope" } }, 400);
   }
 
+  if (parsed.action !== "backup.export" && parsed.action !== "backup.report") {
+    return json(origin, { error: { code: "bad_request", message: "unknown backup action" } }, 400);
+  }
+
   const supabaseUrl = Deno.env.get("SUPABASE_URL");
   const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
   if (supabaseUrl === undefined || serviceRoleKey === undefined) {
@@ -120,7 +124,7 @@ Deno.serve(async (request: Request): Promise<Response> => {
 
   const envelope = parseRpcEnvelope(data);
   if ("error" in envelope) {
-    const status = envelope.error.code === "forbidden" ? 403 : 400;
+    const status = envelope.error.code === "forbidden" ? 403 : envelope.error.code === "conflict" ? 409 : 400;
     return json(origin, envelope, status);
   }
 

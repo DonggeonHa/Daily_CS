@@ -180,6 +180,7 @@
           <section class="panel dashboard-panel" aria-labelledby="dashboard-title">
             <h2 id="dashboard-title">운영 요약</h2>
             <div id="dashboard-summary" class="grid-2" aria-live="polite"></div>
+            <div id="operations-health" class="stack" aria-live="polite"></div>
           </section>
           <section class="panel">
             <h2 id="ops-title">스케줄</h2>
@@ -204,7 +205,7 @@
             <h2>가져오기와 백업</h2>
             <div class="action-grid">
               <button class="button" id="export-json" type="button">JSON 내보내기</button>
-              <button class="button" id="backup-json" type="button">백업 실행</button>
+              <button class="button" id="backup-json" type="button">백업 JSON 만들기</button>
               <button class="button button--danger" id="restore-backup" type="button">백업 복원</button>
             </div>
             <label class="field"><span>JSON 미리보기 가져오기</span><textarea id="import-json" rows="8"></textarea></label>
