@@ -82,7 +82,7 @@ test.before(() => {
   docker(['run', '-d', '--name', container, '-e', 'POSTGRES_PASSWORD=postgres', 'postgres:17-alpine']);
   for (let attempt = 0; attempt < 60; attempt += 1) {
     try {
-      docker(['exec', container, 'pg_isready', '-U', 'postgres']);
+      docker(['exec', container, 'pg_isready', '-h', '127.0.0.1', '-U', 'postgres']);
       docker(['exec', container, 'psql', '-X', '-qAt', '-U', 'postgres', '-c', 'select 1']);
       break;
     } catch (error) {

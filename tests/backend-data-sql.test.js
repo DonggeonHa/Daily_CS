@@ -29,7 +29,7 @@ function sleepSync(ms) {
 function waitForPostgres(containerName) {
   for (let attempt = 0; attempt < 30; attempt += 1) {
     try {
-      docker(["exec", containerName, "pg_isready", "-U", "postgres"]);
+      docker(["exec", containerName, "pg_isready", "-h", "127.0.0.1", "-U", "postgres"]);
       return;
     } catch {
       sleepSync(1000);
@@ -90,6 +90,10 @@ $$;
 `;
 
 const dataAssertionsSql = `
+create or replace function daily_cs_private.schedule_now()
+returns timestamptz language sql stable set search_path = ''
+as $$ select '2026-09-15T01:00:00Z'::timestamptz $$;
+
 insert into daily_cs_private.owner_profile (owner_uid, owner_email_hash)
 values ('11111111-1111-1111-1111-111111111111', 'owner-email-hash');
 
@@ -151,6 +155,9 @@ begin
   from daily_cs_private.lessons l
   join daily_cs_private.lesson_revisions r on r.id = revision_id
   where l.id = target_lesson_id;
+  update daily_cs_private.schedule_state
+  set last_frozen_date = greatest(last_frozen_date, date '2026-09-15')
+  where singleton;
 end;
 $$;
 

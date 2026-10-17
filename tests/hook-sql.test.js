@@ -31,7 +31,7 @@ function sleepSync(ms) {
 function waitForPostgres(containerName) {
   for (let attempt = 0; attempt < 30; attempt += 1) {
     try {
-      docker(["exec", containerName, "pg_isready", "-U", "postgres"]);
+      docker(["exec", containerName, "pg_isready", "-h", "127.0.0.1", "-U", "postgres"]);
       return;
     } catch {
       sleepSync(1000);
