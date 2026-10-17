@@ -39,6 +39,10 @@ test('backup reporting keeps success terminal and rejects unscoped or content-be
   sql(fs.readFileSync(path.join(__dirname, 'operations-health.sql'), 'utf8'));
 });
 
+test('weekday mail gates preserve daily web history, manual weekend jobs and ACK recovery', () => {
+  sql(fs.readFileSync(path.join(__dirname, 'weekday-mail.sql'), 'utf8'));
+});
+
 function owner(action, payload = {}) {
   const escaped = JSON.stringify(payload).replace(/'/g, "''");
   const output = sql(`${ownerSession} set role authenticated;

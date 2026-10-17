@@ -348,6 +348,8 @@ Data:
 
 If nothing is due, data is `{ "message": null }`.
 
+Regular `daily` mail runs Monday through Friday by `scheduled_date` in Asia/Seoul. Weekend regular mail is excluded at preparation and claim, and rejected with `conflict` at materialization, claim recovery, and send start. Existing same-date and one-hour send windows still apply, so Monday does not send weekend backlog. Web snapshots remain daily; explicit `test` and `resend` jobs, sent ACKs, and uncertainty reconciliation retain their existing behavior.
+
 Recipient address remains a private Apps Script property. The mail endpoint does not return it.
 
 State transition: `queued -> claimed`, with a ten-minute lease. Expired claims can return to `queued`. `sending` is never automatically retried.
