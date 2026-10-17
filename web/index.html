@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Owner-only Daily_CS v2 study reader and admin shell">
+    <meta name="theme-color" content="#F6F3EC">
+    <title>Daily_CS</title>
+    <link rel="stylesheet" href="./assets/styles.css">
+    <script src="./assets/config.js"></script>
+    <script type="module" src="./assets/app.js"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">본문으로 건너뛰기</a>
+    <main id="main" class="app-shell" data-auth="loading">
+      <section class="private-shell" id="auth-shell" aria-labelledby="auth-title">
+        <p class="eyebrow">Daily_CS</p>
+        <h1 id="auth-title">개인 학습 공간</h1>
+        <p class="private-copy">등록된 Google 계정으로만 들어올 수 있습니다.</p>
+        <form class="login-card" id="login-form">
+          <button class="button button--primary" type="submit">Google로 로그인</button>
+          <button class="button" id="mock-login" type="button">개발용 합성 세션 시작</button>
+        </form>
+        <p class="status-box" id="auth-status" role="status" aria-live="polite">세션을 확인하는 중입니다.</p>
+      </section>
+
+      <section class="workspace" id="workspace" hidden>
+        <header class="workspace-header">
+          <div>
+            <p class="eyebrow">Owner Console</p>
+            <h1>매일매일 CS</h1>
+            <p id="session-label" class="muted">세션 확인 중</p>
+          </div>
+          <nav class="tabs" aria-label="주요 보기">
+            <button class="tab" type="button" data-view="reader" aria-current="true">읽기</button>
+            <button class="tab" type="button" data-view="admin">관리</button>
+            <button class="tab" type="button" data-view="ops">운영</button>
+          </nav>
+          <div class="header-actions">
+            <button class="button" id="local-logout" type="button">로컬 로그아웃</button>
+            <button class="button button--danger" id="global-logout" type="button">전체 로그아웃</button>
+          </div>
+        </header>
+
+        <section class="view reader-view" id="reader-view" aria-labelledby="reader-title">
+          <aside class="panel tool-panel">
+            <h2 id="reader-title">읽기</h2>
+            <button class="button button--primary" id="reader-today" type="button">오늘 글</button>
+            <form class="stack" id="reader-search-form" role="search">
+              <label class="field"><span>검색</span><input id="reader-search" type="search" placeholder="제목, 요약, 키워드"></label>
+              <label class="field"><span>카테고리</span><select id="reader-category"></select></label>
+              <button class="button" type="submit">목록 갱신</button>
+            </form>
+            <label class="field"><span>날짜</span><input id="reader-date" type="date"></label>
+            <button class="button" id="reader-open-date" type="button">날짜 기록 열기</button>
+            <p class="status-box" id="reader-status" role="status" aria-live="polite">읽기 자료를 준비합니다.</p>
+          </aside>
+          <article class="paper lesson-paper" id="lesson-paper" tabindex="-1">
+            <p class="empty-state">로그인 세션의 학습글을 불러오는 중입니다.</p>
+          </article>
+          <aside class="panel list-panel">
+            <div class="panel-heading">
+              <h2>목록</h2>
+              <p id="reader-count" class="muted">0개</p>
+            </div>
+            <div class="lesson-list" id="reader-list"></div>
+          </aside>
+        </section>
+
+        <section class="view admin-view" id="admin-view" hidden aria-labelledby="admin-title">
+          <aside class="panel list-panel">
+            <div class="panel-heading">
+              <h2 id="admin-title">관리</h2>
+              <button class="button" id="new-draft" type="button">새 초안</button>
+            </div>
+            <div class="filter-grid">
+              <input id="admin-search" type="search" placeholder="관리 목록 검색" aria-label="관리 목록 검색">
+              <select id="admin-state" aria-label="상태 필터">
+                <option value="">전체</option>
+                <option value="draft">초안</option>
+                <option value="published">게시</option>
+                <option value="trash">휴지통</option>
+              </select>
+              <select id="admin-category" aria-label="관리 카테고리 필터"></select>
+              <select id="admin-level" aria-label="관리 레벨 필터"></select>
+            </div>
+            <div class="bulk-row">
+              <button class="button" id="bulk-publish" type="button">선택 게시</button>
+              <button class="button button--danger" id="bulk-trash" type="button">선택 휴지통</button>
+            </div>
+            <div class="lesson-list" id="admin-list"></div>
+          </aside>
+
+          <form class="panel editor-panel" id="editor-form">
+            <div class="panel-heading">
+              <h2>편집기</h2>
+              <p id="editor-lock" class="muted">선택 없음</p>
+            </div>
+            <input type="hidden" id="editor-id">
+            <input type="hidden" id="editor-draft-revision">
+            <input type="hidden" id="editor-published-revision">
+            <input type="hidden" id="editor-state">
+            <div class="grid-2">
+              <label class="field"><span>제목</span><input id="editor-title" required></label>
+              <label class="field"><span>기존 번호</span><input id="editor-legacy-id" inputmode="numeric" pattern="[0-9]*"></label>
+            </div>
+            <label class="field"><span>요약</span><textarea id="editor-summary" rows="2" required></textarea></label>
+            <div class="grid-4">
+              <label class="field"><span>문서 ID</span><input id="editor-document-id" placeholder="lesson-366"></label>
+              <label class="field"><span>순서</span><input id="editor-order" type="number" min="1"></label>
+              <label class="field"><span>주차</span><input id="editor-week" type="number" min="1"></label>
+              <label class="field"><span>카테고리</span><select id="editor-category"></select></label>
+            </div>
+            <div class="grid-3">
+              <label class="field"><span>트랙</span><select id="editor-track"></select></label>
+              <label class="field"><span>레벨</span><select id="editor-level"></select></label>
+              <label class="field"><span>버전 참고</span><input id="editor-version-note"></label>
+            </div>
+            <label class="field"><span>키워드</span><input id="editor-keywords" placeholder="쉼표로 구분"></label>
+            <fieldset class="mode-field">
+              <legend>문서 방식</legend>
+              <label><input type="radio" name="doc-mode" value="structured" checked> 구조화</label>
+              <label><input type="radio" name="doc-mode" value="markdown"> Markdown</label>
+            </fieldset>
+            <section id="structured-editor" class="stack">
+              <label class="field"><span>면접 질문</span><textarea id="editor-question" rows="2"></textarea></label>
+              <label class="field"><span>핵심 설명</span><textarea id="editor-explanation" rows="5" placeholder="줄마다 하나"></textarea></label>
+              <div class="grid-2">
+                <label class="field"><span>비교표 헤더</span><input id="editor-comparison-headers" placeholder="상황, 선택 기준"></label>
+                <label class="field"><span>비교표 행</span><textarea id="editor-comparison-rows" rows="4" placeholder="조회 화면 | 읽기 일관성"></textarea></label>
+              </div>
+              <label class="field"><span>예시 설명</span><textarea id="editor-example-description" rows="2"></textarea></label>
+              <label class="field"><span>예시 코드</span><textarea id="editor-example-code" rows="5"></textarea></label>
+              <label class="field"><span>예시 언어</span><input id="editor-example-language" placeholder="java, sql, text"></label>
+              <label class="field"><span>1분 답변</span><textarea id="editor-answer" rows="3"></textarea></label>
+              <label class="field"><span>주의할 점</span><textarea id="editor-pitfalls" rows="3" placeholder="줄마다 하나"></textarea></label>
+              <label class="field"><span>꼬리 질문</span><textarea id="editor-followups" rows="5" placeholder="질문 | 답변"></textarea></label>
+              <label class="field"><span>퀴즈 질문</span><textarea id="editor-quiz-question" rows="2"></textarea></label>
+              <div class="grid-2">
+                <label class="field"><span>퀴즈 선택지</span><textarea id="editor-quiz-choices" rows="4" placeholder="줄마다 하나"></textarea></label>
+                <label class="field"><span>정답 번호</span><input id="editor-quiz-answer-index" type="number" min="1" max="8" placeholder="1"></label>
+              </div>
+              <label class="field"><span>퀴즈 해설</span><textarea id="editor-quiz-explanation" rows="2"></textarea></label>
+              <label class="field"><span>출처</span><textarea id="editor-sources" rows="5" placeholder="제목 | https://example.com | 참고 내용"></textarea></label>
+            </section>
+            <section id="markdown-editor" class="stack" hidden>
+              <label class="field"><span>Markdown</span><textarea id="editor-markdown" rows="14" placeholder="원시 HTML은 저장 전에 제거됩니다."></textarea></label>
+            </section>
+            <div class="action-grid">
+              <button class="button button--primary" type="submit">초안 저장</button>
+              <button class="button" id="publish-one" type="button">게시</button>
+              <button class="button" id="unpublish-one" type="button">게시 해제</button>
+              <button class="button" id="duplicate-one" type="button">복제</button>
+              <button class="button" id="restore-trash-one" type="button">휴지통 복원</button>
+              <button class="button button--danger" id="trash-one" type="button">휴지통</button>
+              <button class="button button--danger" id="purge-one" type="button">영구 삭제</button>
+            </div>
+            <p class="status-box" id="editor-status" role="status" aria-live="polite">초안은 서버에 저장됩니다. 이 화면은 수업 본문을 브라우저 저장소에 보관하지 않습니다.</p>
+          </form>
+
+          <aside class="panel preview-panel">
+            <div class="panel-heading">
+              <h2>미리보기</h2>
+              <button class="button" id="json-preview" type="button">JSON 보기</button>
+            </div>
+            <div id="preview-output" class="preview-output"></div>
+            <details class="history-panel" open>
+              <summary>이력과 차이</summary>
+              <div class="action-grid">
+                <select id="revision-select" aria-label="복원할 리비전"></select>
+                <button class="button" id="restore-revision" type="button">선택 리비전 복원</button>
+              </div>
+              <div id="history-output"></div>
+              <pre class="code-block" id="diff-output"></pre>
+            </details>
+          </aside>
+        </section>
+
+        <section class="view ops-view" id="ops-view" hidden aria-labelledby="ops-title">
+          <section class="panel dashboard-panel" aria-labelledby="dashboard-title">
+            <h2 id="dashboard-title">운영 요약</h2>
+            <div id="dashboard-summary" class="grid-2" aria-live="polite"></div>
+          </section>
+          <section class="panel">
+            <h2 id="ops-title">스케줄</h2>
+            <div class="grid-2">
+              <label class="field"><span>시작일</span><input id="schedule-start" type="date"></label>
+              <label class="field"><span>발송 시각</span><input id="schedule-hour" type="time" required></label>
+              <label class="field"><span>내일 학습글</span><select id="schedule-override-lesson-id"><option value="">게시된 글 선택</option></select></label>
+              <label class="field"><span>오버라이드 날짜</span><input id="schedule-override-date" type="date"></label>
+              <label class="field"><span>오버라이드 방식</span><select id="schedule-override-mode"><option value="auto">자동</option><option value="lesson">수업 지정</option><option value="empty">비우기</option></select></label>
+              <label class="field"><span>스케줄 리비전</span><input id="schedule-revision" inputmode="numeric"></label>
+            </div>
+            <label class="check-row"><input id="mail-paused" type="checkbox"> 메일 발송 일시정지</label>
+            <div class="action-grid">
+              <button class="button button--primary" id="save-schedule" type="button">스케줄 저장</button>
+              <button class="button" id="save-override" type="button">내일 오버라이드 저장</button>
+              <button class="button" id="rebuild-schedule" type="button">미래 일정 재계산</button>
+              <button class="button" id="send-test-mail" type="button">테스트 메일</button>
+            </div>
+            <p class="status-box" id="ops-status" role="status" aria-live="polite">운영 상태를 불러오는 중입니다.</p>
+          </section>
+          <section class="panel">
+            <h2>가져오기와 백업</h2>
+            <div class="action-grid">
+              <button class="button" id="export-json" type="button">JSON 내보내기</button>
+              <button class="button" id="backup-json" type="button">백업 실행</button>
+              <button class="button button--danger" id="restore-backup" type="button">백업 복원</button>
+            </div>
+            <label class="field"><span>JSON 미리보기 가져오기</span><textarea id="import-json" rows="8"></textarea></label>
+            <div class="action-grid">
+              <button class="button" id="preview-import" type="button">가져오기 검증</button>
+              <button class="button button--primary" id="commit-import" type="button">가져오기 커밋</button>
+            </div>
+            <label class="field"><span>검증된 해시</span><input id="import-expected-hash" placeholder="import.preview 결과 해시"></label>
+            <pre class="code-block" id="json-output"></pre>
+          </section>
+          <section class="panel">
+            <h2>로그와 계정</h2>
+            <div id="log-output" class="log-list"></div>
+            <div id="account-output" class="stack"></div>
+          </section>
+        </section>
+      </section>
+    </main>
+  </body>
+</html>

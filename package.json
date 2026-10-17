@@ -1,0 +1,28 @@
+{
+  "name": "daily-cs-v2-public",
+  "version": "0.2.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "build": "node scripts/build.js",
+    "build:shared-render": "node scripts/build-shared-render.js",
+    "preview": "node scripts/build.js && node scripts/preview-server.js",
+    "test": "node --test tests/render-validation.test.js tests/build-preview.test.js",
+    "test:backend": "node --test tests/backend-contract.test.js",
+    "test:mail": "node --test tests/mail-v2-state.test.js tests/backup-tools.test.js",
+    "test:contract": "node --test tests/backend-contract.test.js tests/mail-v2-state.test.js tests/backup-tools.test.js",
+    "build:mail": "node scripts/build-mail-apps-script.js",
+    "test:integration": "node --test tests/*.test.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "2.87.1",
+    "esbuild": "0.27.2",
+    "marked": "17.0.1"
+  },
+  "devDependencies": {
+    "playwright": "^1.63.0"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

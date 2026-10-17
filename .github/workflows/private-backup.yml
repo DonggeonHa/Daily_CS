@@ -1,0 +1,43 @@
+name: Daily CS Private Archive Backup
+
+on:
+  schedule:
+    - cron: '20 17 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: private-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    if: ${{ github.event.repository.private == true }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out private archive
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '24'
+      - name: Export private backup
+        env:
+          DAILY_CS_BACKUP_API_URL: ${{ secrets.DAILY_CS_BACKUP_API_URL }}
+          DAILY_CS_BACKUP_API_KEY: ${{ secrets.DAILY_CS_BACKUP_API_KEY }}
+          DAILY_CS_BACKUP_DIR: private-backups
+        run: node scripts/backup-nightly.js
+      - name: Commit backup when changed
+        run: |
+          git add private-backups
+          if git diff --cached --quiet -- private-backups; then
+            echo "No backup changes."
+            exit 0
+          fi
+          HASH="$(node -e "const fs=require('fs');const backup=JSON.parse(fs.readFileSync('private-backups/latest.json','utf8'));if(!/^[0-9a-f]{64}$|^[A-Za-z0-9._:-]+$/.test(String(backup.hash))){process.exit(1)};process.stdout.write(String(backup.hash))")"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Update private Daily CS backup ${HASH}"
+          git push
