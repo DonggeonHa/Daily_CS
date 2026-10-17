@@ -43,6 +43,10 @@ test('weekday mail gates preserve daily web history, manual weekend jobs and ACK
   sql(fs.readFileSync(path.join(__dirname, 'weekday-mail.sql'), 'utf8'));
 });
 
+test('deferred course restart preserves the prior Sunday until Monday09KST and survives backup restore', () => {
+  sql(fs.readFileSync(path.join(__dirname, 'deferred-course-restart.sql'), 'utf8'));
+});
+
 function owner(action, payload = {}) {
   const escaped = JSON.stringify(payload).replace(/'/g, "''");
   const output = sql(`${ownerSession} set role authenticated;
