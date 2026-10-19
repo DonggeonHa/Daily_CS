@@ -2,6 +2,7 @@ const assert = require("node:assert/strict");
 const path = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
+const crypto = require("node:crypto");
 const { build } = require("esbuild");
 const { buildSharedRender } = require("../scripts/build-shared-render.js");
 
@@ -40,6 +41,10 @@ async function loadMailHandler(rpcHandler) {
     Request,
     Response,
     URL,
+    Uint8Array,
+    atob,
+    btoa,
+    crypto: crypto.webcrypto,
     console,
     module: { exports: {} },
     exports: {},
@@ -165,3 +170,108 @@ test("Given mail Edge handler When resumeClaim is called Then it is forwarded wi
   assert.deepEqual(rpcCalls.map((call) => call.action), ["mail.resumeClaim"]);
 }
 );
+
+function visualCandidate() {
+  const bytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWQAAAABJRU5ErkJggg==', 'base64');
+  const assetId = crypto.createHash('sha256').update(bytes).digest('hex');
+  const ref = { cid: `visual-${assetId}`, assetId, mimeType: 'image/png' };
+  const visual = {
+    version: 1, id: 'diagram', title: 'Synthetic diagram', description: 'Teaching frame', alt: 'A single node',
+    emailAssetId: assetId, emailScenarioId: 'normal', emailStep: 0,
+    scenarios: [{ id: 'normal', label: 'Normal', steps: [{ title: 'Start', description: 'One node', nodes: [{ id: 'a', label: 'A', detail: '', tone: 'neutral' }], edges: [], metrics: [] }] }],
+  };
+  return {
+    id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', kind: 'daily', date: '2026-09-15',
+    snapshotId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', contentHash: 'c'.repeat(64),
+    lesson: { id: 'lesson-007', title: 'Synthetic diagram lesson', documentKind: 'markdown', document: { markdown: '# Synthetic', visuals: [visual] } },
+    inlineImageRefs: [ref],
+    inlineImages: [{ ...ref, base64: bytes.toString('base64') }],
+    html: `<img src="cid:${ref.cid}">`,
+  };
+}
+
+test('Given snapshot visuals When materialized Then exact asset manifest and snapshot identity are supplied', async () => {
+  // Given
+  const candidate = visualCandidate();
+  delete candidate.inlineImages;
+  let materialized;
+  const { handler } = await loadMailHandler(async ({ action, payload }) => {
+    if (action === 'mail.prepareDue') return { data: { candidate } };
+    if (action === 'mail.materialize') { materialized = payload; return { data: { state: 'queued' } }; }
+    return { data: { message: null } };
+  });
+  // When
+  const response = await handler(post('mail.claimDue'));
+  // Then
+  assert.equal(response.status, 200);
+  assert.deepEqual(JSON.parse(JSON.stringify(materialized.inlineImageRefs)), candidate.inlineImageRefs);
+  assert.equal(materialized.snapshotId, candidate.snapshotId);
+});
+
+test('Given mismatched snapshot asset refs When materializing Then no materialize or claim RPC occurs', async () => {
+  // Given
+  const candidate = visualCandidate();
+  candidate.inlineImageRefs = [];
+  const calls = [];
+  const { handler } = await loadMailHandler(async ({ action }) => { calls.push(action); return { data: { candidate } }; });
+  // When
+  const response = await handler(post('mail.claimDue'));
+  // Then
+  assert.equal(response.status, 500);
+  assert.deepEqual(calls, ['mail.prepareDue']);
+});
+
+for (const action of ['mail.claimDue', 'mail.resumeClaim']) {
+  for (const corrupt of ['missing', 'hash', 'manifest', 'snapshot', 'signature', 'duplicate', 'base64']) {
+    test(`Given ${corrupt} snapshot PNG When ${action} responds Then invalid attachment is withheld`, async () => {
+      // Given
+      const message = visualCandidate();
+      if (corrupt === 'missing') message.inlineImages = [];
+      if (corrupt === 'hash') { const bytes = Buffer.from(message.inlineImages[0].base64, 'base64'); bytes[40] ^= 1; message.inlineImages[0].base64 = bytes.toString('base64'); }
+      if (corrupt === 'manifest') message.inlineImageRefs = [];
+      if (corrupt === 'snapshot') delete message.contentHash;
+      if (corrupt === 'signature') {
+        const bytes = Buffer.from(message.inlineImages[0].base64, 'base64'); bytes[0] = 0;
+        const assetId = crypto.createHash('sha256').update(bytes).digest('hex');
+        message.lesson.document.visuals[0].emailAssetId = assetId;
+        message.inlineImageRefs[0] = { cid: `visual-${assetId}`, assetId, mimeType: 'image/png' };
+        message.inlineImages[0] = { ...message.inlineImageRefs[0], base64: bytes.toString('base64') };
+        message.html = `<img src="cid:visual-${assetId}">`;
+      }
+      if (corrupt === 'duplicate') message.inlineImages.push({ ...message.inlineImages[0] });
+      if (corrupt === 'base64') message.inlineImages[0].base64 += '\n';
+      const { handler } = await loadMailHandler(async ({ action: rpcAction }) => {
+        if (rpcAction === 'mail.prepareDue') return { data: { candidate: null } };
+        return { data: { message } };
+      });
+      // When
+      const response = await handler(post(action));
+      // Then
+      assert.equal(response.status, 500);
+      const body = await response.json();
+      assert.equal(body.error.code, 'internal_error');
+      assert.equal(body.data, undefined);
+    });
+  }
+}
+
+test('Given complete snapshot PNG When resumeClaim responds Then verified inline bytes remain available', async () => {
+  // Given
+  const message = visualCandidate();
+  const { handler } = await loadMailHandler(async () => ({ data: { message } }));
+  // When
+  const response = await handler(post('mail.resumeClaim'));
+  // Then
+  assert.equal(response.status, 200);
+  assert.deepEqual((await response.json()).data.message.inlineImages, message.inlineImages);
+});
+
+test('Given an old lesson discussing CID text When resumed Then prose remains deliverable without images', async () => {
+  // Given
+  const message = { id: 'legacy-message', html: '<p>Use <code>cid:diagram</code> for inline mail.</p>' };
+  const { handler } = await loadMailHandler(async () => ({ data: { message } }));
+  // When
+  const response = await handler(post('mail.resumeClaim'));
+  // Then
+  assert.equal(response.status, 200);
+});

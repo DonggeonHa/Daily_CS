@@ -153,13 +153,16 @@ function createHarness(overrides = {}) {
         if (pattern === "yyyy-MM-dd'T'HH:mm:ss") return '2026-09-15T09:00:00';
         throw new Error(`Unexpected pattern ${pattern}`);
       },
-      newBlob(value) {
-        return { getBytes: () => Array.from(Buffer.from(String(value ?? ''), 'utf8')) };
+      newBlob(value, contentType, name) {
+        const bytes = Array.isArray(value) ? Buffer.from(value) : Buffer.from(String(value ?? ''), 'utf8');
+        return { getBytes: () => Array.from(bytes), getContentType: () => contentType, getName: () => name };
       },
       computeDigest(algorithm, value) {
         assert.equal(algorithm, 'sha256');
-        return Array.from(crypto.createHash('sha256').update(String(value), 'utf8').digest());
+        return Array.from(crypto.createHash('sha256').update(Array.isArray(value) ? Buffer.from(value) : String(value), 'utf8').digest());
       },
+      base64Decode(value) { return Array.from(Buffer.from(value, 'base64')); },
+      base64Encode(bytes) { return Buffer.from(bytes).toString('base64'); },
       base64EncodeWebSafe(bytes) {
         return Buffer.from(bytes).toString('base64url');
       },
@@ -283,6 +286,186 @@ test('daily poll begins remotely, records local sending before MailApp, then ACK
   assert.equal(state.text, undefined);
   assert.equal(state.html, undefined);
   assert.match(state.bodyHash, /^\d+:\d+:\d+:/);
+});
+
+const IMAGE_BYTES = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWQAAAABJRU5ErkJggg==', 'base64');
+test('Given an old lesson discussing CID text When sent Then prose is not mistaken for a missing image', () => {
+  // Given
+  const message = makeMessage({ html: '<p>Use <code>cid:diagram</code> for inline mail.</p>' });
+  const harness = createHarness({ responses: createStatefulMailBackend(message) });
+  // When
+  const result = harness.context.dailyCsV2Poller();
+  // Then
+  assert.equal(result.status, 'sent');
+  assert.equal(harness.calls.sends[0].inlineImages, undefined);
+});
+function makeImageMessage(overrides = {}) {
+  const assetId = crypto.createHash('sha256').update(IMAGE_BYTES).digest('hex');
+  const ref = { cid: `visual-${assetId}`, assetId, mimeType: 'image/png' };
+  return makeMessage({
+    snapshotId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    contentHash: 'c'.repeat(64),
+    html: `<p>Visual explanation</p><img src="cid:${ref.cid}" alt="Synthetic diagram">`,
+    inlineImageRefs: [ref],
+    inlineImages: [{ ...ref, base64: IMAGE_BYTES.toString('base64') }],
+    ...overrides,
+  });
+}
+
+test('Given a snapshot PNG When the poll sends Then CID bytes reach MailApp without binary Properties storage', () => {
+  // Given
+  const message = makeImageMessage();
+  const harness = createHarness({ propertyValueLimit: 9000, responses: createStatefulMailBackend(message) });
+  // When
+  const result = harness.context.dailyCsV2Poller();
+  // Then
+  assert.equal(result.status, 'sent');
+  const blob = harness.calls.sends[0].inlineImages[message.inlineImages[0].cid];
+  assert.deepEqual(Buffer.from(blob.getBytes()), IMAGE_BYTES);
+  assert.equal(blob.getContentType(), 'image/png');
+  assert.equal(blob.getName(), `${message.inlineImages[0].assetId}.png`);
+  assert.doesNotMatch(JSON.stringify(harness.stores), /iVBOR|base64|inlineImages/);
+});
+
+test('Given a 256KiB snapshot PNG When sent Then its bytes remain out of compact Properties', () => {
+  // Given
+  const bytes = Buffer.alloc(262144);
+  IMAGE_BYTES.copy(bytes);
+  const assetId = crypto.createHash('sha256').update(bytes).digest('hex');
+  const ref = { cid: `visual-${assetId}`, assetId, mimeType: 'image/png' };
+  const message = makeImageMessage({ html: `<img src="cid:${ref.cid}">`, inlineImageRefs: [ref], inlineImages: [{ ...ref, base64: bytes.toString('base64') }] });
+  const harness = createHarness({ propertyValueLimit: 9000, responses: createStatefulMailBackend(message) });
+  // When
+  const result = harness.context.dailyCsV2Poller();
+  // Then
+  assert.equal(result.status, 'sent');
+  assert.deepEqual(Buffer.from(harness.calls.sends[0].inlineImages[ref.cid].getBytes()), bytes);
+  assert.ok(Object.values(harness.stores).every((value) => Buffer.byteLength(String(value)) < 9000));
+});
+
+const invalidImageCases = [
+  ['missing bytes', (m) => { m.inlineImages = []; }],
+  ['missing manifest', (m) => { delete m.inlineImageRefs; }],
+  ['duplicate CID', (m) => { m.inlineImages.push({ ...m.inlineImages[0] }); }],
+  ['duplicate manifest CID', (m) => { m.inlineImageRefs.push({ ...m.inlineImageRefs[0] }); }],
+  ['wrong MIME', (m) => { m.inlineImages[0].mimeType = 'image/svg+xml'; }],
+  ['invalid base64', (m) => { m.inlineImages[0].base64 = '!!!!'; }],
+  ['noncanonical base64', (m) => { m.inlineImages[0].base64 = m.inlineImages[0].base64.replace(/==$/, 'AB=='); }],
+  ['PNG signature', (m) => { const bytes = Buffer.from(IMAGE_BYTES); bytes[0] = 0; m.inlineImages[0].base64 = bytes.toString('base64'); }],
+  ['SHA mismatch', (m) => { const bytes = Buffer.from(IMAGE_BYTES); bytes[40] ^= 1; m.inlineImages[0].base64 = bytes.toString('base64'); }],
+  ['oversized PNG', (m) => { m.inlineImages[0].base64 = Buffer.alloc(262145).toString('base64'); }],
+  ['oversized dimensions', (m) => { const bytes = Buffer.from(IMAGE_BYTES); bytes.writeUInt32BE(2049, 16); m.inlineImages[0].base64 = bytes.toString('base64'); }],
+  ['missing snapshot identity', (m) => { delete m.contentHash; }],
+  ['unreferenced image', (m) => { m.html = '<p>No CID</p>'; }],
+];
+for (const [label, mutate] of invalidImageCases) {
+  test(`Given ${label} When a visual mail is claimed Then it fails before beginSending`, () => {
+    // Given
+    const message = makeImageMessage();
+    mutate(message);
+    const harness = createHarness({ responses: createStatefulMailBackend(message) });
+    // When / Then
+    assert.throws(() => harness.context.dailyCsV2Poller(), /inline|image|PNG|snapshot/i);
+    assert.deepEqual(harness.calls.api.map((entry) => entry.body.action), ['mail.claimDue']);
+    assert.equal(harness.calls.sends.length, 0);
+  });
+}
+
+test('Given a visual claim interrupted before begin When resumed Then PNG is fetched again and sent once', () => {
+  // Given
+  const message = makeImageMessage();
+  let failBegin = true;
+  const backend = createStatefulMailBackend(message);
+  const harness = createHarness({ responses(body) {
+    if (body.action === 'mail.beginSending' && failBegin) { failBegin = false; return new Error('temporary begin failure'); }
+    return backend(body);
+  } });
+  assert.throws(() => harness.context.dailyCsV2Poller(), /temporary begin/);
+  // When
+  const result = harness.context.dailyCsV2Poller();
+  // Then
+  assert.equal(result.status, 'sent');
+  assert.equal(harness.calls.sends.length, 1);
+  assert.equal(harness.calls.api.filter((entry) => entry.body.action === 'mail.resumeClaim').length, 1);
+});
+
+test('Given a compact visual claim When resumed bytes are incomplete Then it remains unsent and claimed', () => {
+  // Given
+  const message = makeImageMessage();
+  let resumed = false;
+  const backend = createStatefulMailBackend(message);
+  const harness = createHarness({ responses(body) {
+    if (body.action === 'mail.beginSending') return new Error('temporary begin failure');
+    if (body.action === 'mail.resumeClaim') { resumed = true; return { message: { ...message, inlineImages: [] } }; }
+    return backend(body);
+  } });
+  assert.throws(() => harness.context.dailyCsV2Poller(), /temporary begin/);
+  // When / Then
+  assert.throws(() => harness.context.dailyCsV2Poller(), /inline|image/i);
+  assert.equal(resumed, true);
+  assert.equal(harness.calls.sends.length, 0);
+  assert.equal(JSON.parse(harness.stores[stateKey('daily_2026-09-15')]).status, 'claimed');
+});
+
+test('Given a compact visual claim When snapshot hash changes on resume Then it fails before begin', () => {
+  // Given
+  const message = makeImageMessage();
+  const harness = createHarness({ responses: {
+    'mail.claimDue': { message },
+    'mail.beginSending': new Error('temporary begin failure'),
+    'mail.resumeClaim': { message: { ...message, contentHash: 'd'.repeat(64) } },
+  } });
+  assert.throws(() => harness.context.dailyCsV2Poller(), /temporary begin/);
+  // When / Then
+  assert.throws(() => harness.context.dailyCsV2Poller(), /immutable|snapshot|manifest/i);
+  assert.equal(harness.calls.api.filter((entry) => entry.body.action === 'mail.beginSending').length, 1);
+  assert.equal(harness.calls.sends.length, 0);
+});
+
+test('Given a visual send with failed ACK When polled again Then it ACKs without image fetch or resend', () => {
+  // Given
+  const message = makeImageMessage();
+  let failAck = true;
+  const backend = createStatefulMailBackend(message);
+  const harness = createHarness({ responses(body) {
+    if (body.action === 'mail.ackSent' && failAck) { failAck = false; return new Error('ACK offline'); }
+    return backend(body);
+  } });
+  assert.throws(() => harness.context.dailyCsV2Poller(), /ACK offline/);
+  const before = harness.calls.api.length;
+  // When
+  const result = harness.context.dailyCsV2Poller();
+  // Then
+  assert.equal(result.status, 'ack-only');
+  assert.equal(harness.calls.sends.length, 1);
+  assert.deepEqual(harness.calls.api.slice(before).map((entry) => entry.body.action), ['mail.ackSent']);
+});
+
+for (const legacyStatus of ['sent', 'sending']) {
+  test(`Given legacy ${legacyStatus} and missing image bytes When polled Then the prior send guard reconciles without begin`, () => {
+    // Given
+    const message = makeImageMessage({ inlineImages: [] });
+    const harness = createHarness({
+      properties: { MAIL_STATE_2026_09_15: JSON.stringify({ status: legacyStatus }) },
+      responses: createStatefulMailBackend(message),
+    });
+    // When / Then
+    if (legacyStatus === 'sent') assert.equal(harness.context.dailyCsV2Poller().status, 'skipped-legacy-sent');
+    else assert.throws(() => harness.context.dailyCsV2Poller(), /legacy uncertain/i);
+    assert.deepEqual(harness.calls.api.map((entry) => entry.body.action), ['mail.claimDue', 'mail.reconcileLegacyGuard']);
+    assert.equal(harness.calls.sends.length, 0);
+  });
+}
+
+test('Given a visual provider failure When polled again Then unresolved sending becomes uncertain without a second send', () => {
+  // Given
+  const harness = createHarness({ sendError: 'provider ambiguous', responses: createStatefulMailBackend(makeImageMessage()) });
+  assert.throws(() => harness.context.dailyCsV2Poller(), /provider ambiguous/);
+  const before = harness.calls.api.length;
+  // When / Then
+  assert.throws(() => harness.context.dailyCsV2Poller(), /uncertain local sending/i);
+  assert.equal(harness.calls.sends.length, 1);
+  assert.deepEqual(harness.calls.api.slice(before).map((entry) => entry.body.action), ['mail.markUncertain']);
 });
 
 test('uncertain daily local state reconciles and refuses to resend', () => {

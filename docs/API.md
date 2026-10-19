@@ -21,6 +21,21 @@ Common error codes are `bad_request`, `unauthorized`, `forbidden`, `not_found`, 
 
 ## Owner API Actions
 
+### `visual.put` / `visual.get`
+
+Visual PNGs use the same pinned owner and active `auth.sessions` checks as lesson operations. No anonymous asset route or Storage bucket is created. Direct asset-table access is revoked from client and machine roles.
+
+`visual.put` payload: `{ "assetId": "<lowercase SHA256 of PNG bytes>", "mimeType": "image/png", "width": 720, "height": 480, "base64": "<canonical base64>" }`.
+`visual.get` payload: `{ "assetId": "<SHA256>" }`. Both return `{ "asset": { "assetId", "mimeType", "width", "height", "base64" } }` inside `data`.
+
+Assets are immutable and deduplicated by hash. Uploads verify SHA256, PNG signature and IHDR dimensions, a PNG end marker, dimensions of 1–2048 pixels, and a 256 KiB byte limit. Reusing a hash keeps its existing bytes. Referenced history retains its assets.
+
+Documents may include up to three `visuals`, each `{ version: 1, id, title, description, alt, emailAssetId, emailScenarioId, emailStep, scenarios }`. A scenario is `{ id, label, steps }`; a step is `{ title, description, nodes, edges?, metrics? }`; nodes are `{ id, label, detail?, tone }`, edges `{ from, to, label }`, and metrics `{ label, value }`. IDs are ASCII slugs starting with a letter, at most 48 characters. Scenario counts are 1–8, step counts 1–12, node counts 1–12, edges at most 24, metrics at most 6. Node tones are `neutral`, `active`, `success`, `warning`, or `error`. Unknown fields, duplicate IDs, missing node references, URLs, HTML, code fences, control characters, and invalid email scenario/step references are rejected. Text limits are 120 characters for titles/labels and metric values, 1200 for descriptions/alt, 600 for node detail, and 160 for edge labels.
+
+Visual structure is checked on draft save, publication, import, and restore. Drafts may reference PNGs that have not been uploaded yet, including drafts of published lessons; publication, immutable revisions, and snapshots require every referenced PNG to exist. Version 2 exports add an `assets` array with each PNG's metadata and bytes once; documents, snapshots, and outbox manifests retain hash references. Restore validates supplied assets and requires complete asset references for immutable revisions and snapshots before writing, while allowing unresolved draft references. It then restores assets and documents in the existing atomic transaction. Older exports without `assets` remain valid when their immutable documents contain no visual references.
+
+Mail preparation returns `candidate.inlineImageRefs`, sorted and deduplicated by `assetId`. Materialization carries that manifest and `snapshotId` with the existing `contentHash`; visual messages require an exact match to their immutable snapshot. Claimed or resumed messages add `lesson`, `contentHash`, `inlineImageRefs`, and `inlineImages: [{ cid: "visual-<assetId>", assetId, mimeType: "image/png", base64 }]`. Only the hash manifest is stored in the outbox. Asset bytes are returned after credential and claim authorization; they are omitted from ACK-only responses. The sender validates the complete attachment set before `mail.beginSending`.
+
 ### `settings.get`
 
 Payload: `{}`.

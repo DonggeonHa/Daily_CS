@@ -1,5 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.87.1";
 import { renderMailFromSnapshot } from "../_shared/render.mjs";
+import { htmlMatchesImageRefs, snapshotImageRefs, validInlineImages } from "./inline-images.ts";
 
 type ApiEnvelope = {
   readonly action: string;
@@ -144,6 +145,10 @@ async function materializeDueMail(
   if (typeof candidate.id !== "string" || typeof candidate.contentHash !== "string" || !isRecord(candidate.lesson)) {
     return { error: { code: "internal_error", message: "mail render candidate is incomplete" } };
   }
+  const inlineImageRefs = snapshotImageRefs(candidate);
+  if (inlineImageRefs === null) {
+    return { error: { code: "internal_error", message: "mail snapshot image manifest is inconsistent" } };
+  }
 
   const snapshotForRender = {
     ...candidate.lesson,
@@ -152,13 +157,15 @@ async function materializeDueMail(
     snapshotId: candidate.snapshotId,
   };
   const rendered = renderedMail(renderMailFromSnapshot(snapshotForRender));
-  if (rendered === null) {
+  if (rendered === null || !htmlMatchesImageRefs(rendered.html, inlineImageRefs)) {
     return { error: { code: "internal_error", message: "mail renderer returned incomplete content" } };
   }
 
   return callMailRpc(client, "mail.materialize", {
     candidateId: candidate.id,
     contentHash: candidate.contentHash,
+    snapshotId: candidate.snapshotId,
+    inlineImageRefs,
     subject: rendered.subject,
     text: rendered.text,
     html: rendered.html,
@@ -209,6 +216,11 @@ Deno.serve(async (request: Request): Promise<Response> => {
   const envelope = await callMailRpc(client, parsed.action, parsed.payload, token);
   if ("error" in envelope) {
     return json(origin, envelope, statusFor(envelope.error.code));
+  }
+
+  if ((parsed.action === "mail.claimDue" || parsed.action === "mail.resumeClaim") &&
+      isRecord(envelope.data) && isRecord(envelope.data.message) && !await validInlineImages(envelope.data.message)) {
+    return json(origin, { error: { code: "internal_error", message: "mail snapshot images are missing or invalid" } }, 500);
   }
 
   return json(origin, envelope);

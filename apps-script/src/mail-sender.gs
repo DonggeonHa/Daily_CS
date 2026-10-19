@@ -13,6 +13,7 @@ var DailyCsV2Mail = (function () {
   var MAX_SUBJECT_LENGTH = 200;
   var MAX_TEXT_BYTES = 200000;
   var MAX_HTML_BYTES = 200000;
+  var MAX_IMAGE_BYTES = 262144;
   var REQUIRED_PROPS = [
     'DAILY_CS_MAIL_API_URL',
     'DAILY_CS_MAIL_API_KEY',
@@ -150,6 +151,74 @@ var DailyCsV2Mail = (function () {
     return message.kind + '_' + message.commandId;
   }
 
+  function imageRefs(message) {
+    var refs = message.inlineImageRefs === undefined ? [] : message.inlineImageRefs;
+    if (!Array.isArray(refs) || refs.length > 3) {
+      throw new Error('inline image manifest must contain at most 3 images');
+    }
+    var seen = {};
+    refs.forEach(function (ref) {
+      if (!ref || !/^[0-9a-f]{64}$/.test(ref.assetId) || ref.cid !== 'visual-' + ref.assetId || ref.mimeType !== 'image/png' || seen[ref.cid]) {
+        throw new Error('invalid or duplicate inline image manifest');
+      }
+      seen[ref.cid] = true;
+    });
+    return refs.slice().sort(function (a, b) { return a.assetId.localeCompare(b.assetId); });
+  }
+
+  function prepareInlineImages(message) {
+    var refs = imageRefs(message);
+    var images = message.inlineImages === undefined ? [] : message.inlineImages;
+    if (!Array.isArray(images) || images.length !== refs.length) {
+      throw new Error('inline image bytes do not match the snapshot manifest');
+    }
+    var cids = {};
+    var pattern = /<img\b[^>]*\bsrc\s*=\s*(?:"cid:([^"]*)"|'cid:([^']*)'|cid:([^\s>]+))/gi;
+    var match;
+    while ((match = pattern.exec(String(message.html))) !== null) {
+      cids[match[1] || match[2] || match[3] || ''] = true;
+    }
+    if (Object.keys(cids).length !== refs.length || refs.some(function (ref) { return !cids[ref.cid]; })) {
+      throw new Error('inline image HTML references do not match the snapshot manifest');
+    }
+    if (refs.length && (!/^[0-9a-f]{64}$/.test(message.contentHash || '') || !/^[0-9a-fA-F-]{36}$/.test(message.snapshotId || ''))) {
+      throw new Error('inline image snapshot identity is required');
+    }
+    var blobs = {};
+    images.forEach(function (image) {
+      var ref = refs.filter(function (entry) { return entry.cid === (image && image.cid); })[0];
+      if (!ref || blobs[image.cid] || image.assetId !== ref.assetId || image.mimeType !== ref.mimeType) {
+        throw new Error('invalid or duplicate inline image');
+      }
+      if (typeof image.base64 !== 'string' || !image.base64.length || image.base64.length > 4 * Math.ceil(MAX_IMAGE_BYTES / 3) ||
+          image.base64.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(image.base64)) {
+        throw new Error('invalid inline image base64 or size');
+      }
+      var bytes = Utilities.base64Decode(image.base64);
+      if (bytes.length < 33 || bytes.length > MAX_IMAGE_BYTES || Utilities.base64Encode(bytes) !== image.base64) {
+        throw new Error('invalid inline image size or base64 encoding');
+      }
+      var png = [137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82];
+      if (png.some(function (byte, index) { return (bytes[index] & 255) !== byte; })) {
+        throw new Error('invalid PNG signature or IHDR');
+      }
+      function dimension(offset) {
+        return (bytes[offset] & 255) * 16777216 + (bytes[offset + 1] & 255) * 65536 + (bytes[offset + 2] & 255) * 256 + (bytes[offset + 3] & 255);
+      }
+      if (dimension(16) < 1 || dimension(16) > 2048 || dimension(20) < 1 || dimension(20) > 2048) {
+        throw new Error('invalid PNG dimensions');
+      }
+      var hash = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, bytes).map(function (byte) {
+        return ('0' + (byte & 255).toString(16)).slice(-2);
+      }).join('');
+      if (hash !== ref.assetId) {
+        throw new Error('inline image SHA256 does not match snapshot manifest');
+      }
+      blobs[image.cid] = Utilities.newBlob(bytes, 'image/png', image.assetId + '.png');
+    });
+    return blobs;
+  }
+
   function propertyKey(key) {
     return 'MAIL_V2_STATE_' + String(key).replace(/[^A-Za-z0-9_]/g, '_');
   }
@@ -189,12 +258,17 @@ var DailyCsV2Mail = (function () {
     var subject = String(message.subject || '');
     var text = String(message.text || '');
     var html = String(message.html || '');
-    return [
+    var bodyHash = [
       utf8Bytes(subject),
       utf8Bytes(text),
       utf8Bytes(html),
       Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, subject + '\n' + text + '\n' + html)),
     ].join(':');
+    var refs = imageRefs(message);
+    return refs.length ? bodyHash + ':visual:' + Utilities.base64EncodeWebSafe(Utilities.computeDigest(
+      Utilities.DigestAlgorithm.SHA_256,
+      JSON.stringify([message.snapshotId, message.contentHash, refs])
+    )) : bodyHash;
   }
 
   function compactStateFromMessage(message, status, currentTime) {
@@ -397,6 +471,12 @@ var DailyCsV2Mail = (function () {
       reconcileLegacyGuard(config, message, legacyState, currentTime);
       throw new Error('Legacy uncertain send state exists for ' + message.date + '; refusing to resend');
     }
+    var inlineImages = prepareInlineImages(message);
+    if ((String(state.bodyHash).indexOf(':visual:') !== -1 || imageRefs(message).length) &&
+        (state.bodyHash !== compactBodyHash(message) || state.messageId !== message.id || state.commandId !== message.commandId ||
+         state.kind !== message.kind || state.dateKey !== message.date)) {
+      throw new Error('immutable snapshot image manifest changed during claim recovery');
+    }
     validateQuota();
     var beginIdempotencyKey = state.commandId + ':begin-sending';
     postMailApi(config, 'mail.beginSending', withIdempotency({
@@ -416,13 +496,17 @@ var DailyCsV2Mail = (function () {
       bodyHash: state.bodyHash,
       updatedAt: timestamp(currentTime),
     });
-    MailApp.sendEmail({
+    var outgoing = {
       to: config.recipient,
       subject: String(message.subject),
       body: String(message.text),
       htmlBody: String(message.html),
       name: message.senderName || '매일매일 CS',
-    });
+    };
+    if (Object.keys(inlineImages).length) {
+      outgoing.inlineImages = inlineImages;
+    }
+    MailApp.sendEmail(outgoing);
     var sentAt = timestamp(now());
     var sentState = {
       status: 'sent',

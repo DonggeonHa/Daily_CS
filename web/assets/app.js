@@ -1,5 +1,6 @@
 import { renderLessonHtml, CATEGORY_LABELS, TRACK_LABELS, LEVEL_LABELS } from "../../lib/render.js";
 import { CATEGORIES, TRACKS, LEVELS } from "../../lib/validation.js";
+import { mountVisualPlayers } from "./visual-player.js";
 import {
   ACTIONS,
   DailyCsApiError,
@@ -35,6 +36,10 @@ const state = {
 };
 
 const nodes = {};
+const visualPlayers = new Map();
+let editorVisuals;
+let readerRequest = 0;
+let editorRequest = 0;
 
 document.addEventListener("DOMContentLoaded", init);
 
@@ -110,6 +115,7 @@ function injectOwnedControls() {
 
 
 function bindEvents() {
+  window.addEventListener("pagehide", () => clearVisualPlayers());
   nodes.loginForm.addEventListener("submit", signIn);
   nodes.localLogout.addEventListener("click", () => signOutAndReset("local"));
   nodes.globalLogout.addEventListener("click", () => signOutAndReset("global"));
@@ -280,20 +286,24 @@ async function openDateSelection() {
 }
 
 async function openReaderDay(payload) {
+  const request = ++readerRequest;
+  clearVisualPlayer(nodes.lessonPaper);
   try {
     const action = payload.snapshotId ? ACTIONS.readerSnapshot : ACTIONS.readerToday;
     const data = await owner(action, payload);
+    if (request !== readerRequest) return;
     const day = normalizeReaderDay(data.day ?? data);
     if (!day?.lesson) {
       renderEmptyLesson(payload.date ? "해당 날짜의 학습 스냅샷이 없습니다." : "오늘 공개된 학습 스냅샷이 없습니다.");
       return;
     }
     state.selectedReaderKey = day.date ?? day.lesson.id;
-    nodes.lessonPaper.innerHTML = renderLessonHtml(day.lesson);
+    renderVisualLesson(nodes.lessonPaper, day.lesson);
     nodes.lessonPaper.focus({ preventScroll: true });
     setStatus(nodes.readerStatus, `${day.date ?? "오늘"} 학습글을 열었습니다.`, "info");
     renderReaderList();
   } catch (error) {
+    if (request !== readerRequest) return;
     handleActionError(error, nodes.readerStatus);
     renderEmptyLesson("학습글을 불러오지 못했습니다.");
   }
@@ -308,6 +318,7 @@ function renderReaderList() {
 }
 
 function renderEmptyLesson(message) {
+  clearVisualPlayer(nodes.lessonPaper);
   nodes.lessonPaper.innerHTML = `<p class="empty-state">${escapeText(message)}</p>`;
   setStatus(nodes.readerStatus, message, "warning");
 }
@@ -340,7 +351,9 @@ function renderAdminList() {
 }
 
 async function loadEditor(id) {
+  const request = ++editorRequest;
   const data = await owner(ACTIONS.lessonGet, { id });
+  if (request !== editorRequest) return;
   const lesson = normalizeLesson(data.lesson);
   if (!lesson) return;
   mergeLesson(lesson);
@@ -352,6 +365,7 @@ async function loadEditor(id) {
 
 function fillEditor(lesson) {
   const document = lesson.draftDocument ?? {};
+  editorVisuals = document.visuals;
   nodes.editorId.value = lesson.id;
   nodes.editorVersion.value = String(lesson.rowRevision);
   if (nodes.editorState) nodes.editorState.value = lesson.state;
@@ -425,9 +439,11 @@ function renderHistory(revisions) {
 }
 
 async function previewRevision(revisionId) {
+  const request = ++editorRequest;
   const data = await owner(ACTIONS.revisionGet, { revisionId });
+  if (request !== editorRequest) return;
   const revision = normalizeRevision(data.revision);
-  nodes.previewOutput.innerHTML = renderLessonHtml(revisionToRenderable(revision));
+  renderVisualLesson(nodes.previewOutput, revisionToRenderable(revision));
   nodes.jsonOutput.textContent = JSON.stringify({ previewRevision: revision }, null, 2);
 }
 
@@ -449,13 +465,15 @@ async function restoreRevision(revisionId) {
 }
 
 async function createDraft() {
+  const document = draftDocumentFromEditor();
+  delete document.visuals;
   const nextLegacyId = nextAvailableLegacyId();
   const payload = {
     ...(nextLegacyId ? { legacyId: nextLegacyId } : {}),
     title: "새 초안",
     category: nodes.editorCategory.value || "database",
     documentKind: "structured",
-    document: draftDocumentFromEditor(),
+    document,
     state: "draft"
   };
   const data = await owner(ACTIONS.lessonCreate, payload);
@@ -529,6 +547,8 @@ async function purgeSelected() {
   });
   state.lessons = state.lessons.filter((lesson) => lesson.id !== nodes.editorId.value);
   nodes.editorForm.reset();
+  editorVisuals = undefined;
+  clearVisualPlayer(nodes.previewOutput);
   nodes.previewOutput.innerHTML = "";
   renderAdminList();
 }
@@ -721,13 +741,14 @@ function showEditorJson() {
 }
 
 function renderPreviewFromEditor() {
-  nodes.previewOutput.innerHTML = renderLessonHtml({
-    ...draftDocumentFromEditor(),
+  const draft = draftDocumentFromEditor();
+  renderVisualLesson(nodes.previewOutput, {
+    ...draft,
     id: nodes.editorAlias.value || nodes.editorId.value || "preview",
     legacyAlias: nodes.editorAlias.value,
     title: nodes.editorTitle.value.trim() || "제목 없음",
     category: nodes.editorCategory.value,
-    document: currentDocumentKind() === "markdown" ? { kind: "markdown", markdown: nodes.editorMarkdown.value } : undefined
+    document: currentDocumentKind() === "markdown" ? { ...draft, kind: "markdown" } : undefined
   });
 }
 
@@ -758,6 +779,7 @@ function draftDocumentFromEditor() {
     versionNote: nodes.editorVersionNote?.value.trim() || "관리자 입력",
     sources: sourceRows.map((row) => ({ title: row[0], url: row[1], note: row[2] }))
   };
+  if (editorVisuals !== undefined) common.visuals = editorVisuals;
   if (currentDocumentKind() === "markdown") {
     return { ...common, markdown: nodes.editorMarkdown.value };
   }
@@ -818,6 +840,10 @@ async function signOutAndReset(scope) {
 }
 
 function clearSensitiveMemory() {
+  clearVisualPlayers();
+  editorVisuals = undefined;
+  readerRequest += 1;
+  editorRequest += 1;
   state.authGeneration += 1;
   state.cleanupRefresh?.();
   state.dashboard = null;
@@ -953,10 +979,28 @@ function normalizeSettings(data, fallback = {}) {
 }
 
 function switchView(view) {
+  readerRequest += 1;
+  editorRequest += 1;
+  visualPlayers.forEach(player => player.pause());
   for (const key of ["reader", "admin", "ops"]) {
     document.getElementById(`${key}-view`).hidden = key !== view;
   }
   nodes.tabs.forEach((tab) => tab.setAttribute("aria-current", tab.dataset.view === view ? "true" : "false"));
+}
+
+function renderVisualLesson(container, lesson) {
+  clearVisualPlayer(container);
+  container.innerHTML = renderLessonHtml(lesson);
+  visualPlayers.set(container, mountVisualPlayers(container, lesson.document?.visuals ?? lesson.visuals));
+}
+
+function clearVisualPlayer(container) {
+  visualPlayers.get(container)?.destroy();
+  visualPlayers.delete(container);
+}
+
+function clearVisualPlayers() {
+  for (const container of visualPlayers.keys()) clearVisualPlayer(container);
 }
 
 function editorInputs() {

@@ -108,6 +108,12 @@ All spacing derives from a base of 4px.
 - **Variants**: draft, published, conflict, trash, schedule, backup.
 - **Accessibility**: forms use labels, bulk actions require explicit confirmation.
 
+### Lesson Visual
+- **Structure**: caption, explanatory step, responsive node boxes, named directional arrows, metrics, and text alternative. Web controls select precomputed scenarios and steps, with no autoplay.
+- **Tokens**: existing paper/raised surfaces, borders, status colors, Body text, H3 title, and 4px spacing rhythm. Active and success nodes use the green accent and soft accent surface.
+- **Email**: the same canonical frame reflows into a single column at360 logical pixels and renders at2x for a720px PNG. All rasterized text is at least Body16px, so it remains readable at375px email width. Logical height is capped at1024px, PNG height at2048px, and size at256KiB; shorten canonical copy when needed.
+- **Accessibility**: native labeled controls, visible keyboard focus, no forced motion, explicit arrow labels, readable metrics, and descriptive image alt plus plain text fallback.
+
 ## 6. Motion & Interaction
 
 ### Timing

@@ -136,7 +136,7 @@ export function documentForRender(lesson) {
       week: document.week ?? "",
       versionNote: document.versionNote ?? "",
       sources: Array.isArray(document.sources) ? document.sources : [],
-      document: { kind: "markdown", markdown: document.markdown ?? "" }
+      document: { kind: "markdown", markdown: document.markdown ?? "", ...(document.visuals !== undefined ? { visuals: document.visuals } : {}) }
     };
   }
   return {
