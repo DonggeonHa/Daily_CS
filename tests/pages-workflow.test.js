@@ -3,6 +3,17 @@ const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
 
+test("Pages deploys only main while feature dispatches retain the build checks", () => {
+  const workflow = fs.readFileSync(path.resolve(__dirname, "../.github/workflows/pages.yml"), "utf8");
+  const buildJob = workflow.split(/^  build:\s*$/m)[1].split(/^  deploy:\s*$/m)[0];
+  const deployJob = workflow.split(/^  deploy:\s*$/m)[1];
+  assert.match(workflow, /^  workflow_dispatch:\s*$/m);
+  assert.doesNotMatch(buildJob, /^    if:/m);
+  assert.match(buildJob, /run: node --test --test-concurrency=1 tests\/\*\.test\.js/);
+  assert.equal(deployJob.match(/^    if:\s*(.+)$/m)?.[1].trim(), "github.ref == 'refs/heads/main'");
+  assert.match(deployJob, /^    needs: build\s*$/m);
+});
+
 test("Pages installs the locked Chromium browser and Linux dependencies before browser tests", () => {
   // Given a fresh Ubuntu runner installs the project's locked npm dependencies.
   const workflow = fs.readFileSync(path.resolve(__dirname, "../.github/workflows/pages.yml"), "utf8");
