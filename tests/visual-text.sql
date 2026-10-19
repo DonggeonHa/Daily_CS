@@ -44,3 +44,48 @@ begin
   end loop;
   perform pg_temp.visual_assert(cardinality(failures)=0,array_to_string(failures,'; '));
 end $text$;
+
+-- jsonb has no collation. Rebind only the helper's text predicate so the real validator
+-- sees both database-default and C collation, then restore the exact function definition.
+do $locale$
+declare
+  original text:=pg_get_functiondef('daily_cs_private.visual_text(jsonb,integer,boolean)'::regprocedure);
+  predicate text:='(value #>> ''{}'') !~*';
+  whitespace text:=U&'\0009\000a\000b\000c\000d \00a0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200a\2028\2029\202f\205f\3000\feff';
+  visuals jsonb:=pg_temp.visual_fixture(repeat('a',64)); changed jsonb;
+  locale_name text; scheme text; value text; code integer; failures text[]:='{}';
+begin
+  perform pg_temp.visual_assert(strpos(original,predicate)>0,'visual text collation test predicate missing');
+  foreach locale_name in array array['default','C'] loop
+    execute replace(original,predicate,format('(value #>> ''{}'') COLLATE %I !~*',locale_name));
+    -- Given every ECMAScript whitespace code point, When placed before the colon, Then reject both schemes.
+    foreach scheme in array array['javascript','data'] loop
+      for code in 1..length(whitespace) loop
+        value:=scheme||substr(whitespace,code,1)||':example';
+        changed:=jsonb_set(visuals,'{0,description}',to_jsonb(value));
+        if not pg_temp.visual_rejects(format('select daily_cs_private.validate_visuals(%L::jsonb)',changed)) then
+          failures:=array_append(failures,locale_name||': scheme accepted U+'||to_hex(ascii(substr(whitespace,code,1)))||' '||scheme);
+        end if;
+      end loop;
+    end loop;
+    -- Controls remain invalid independently of the locale's POSIX character classes.
+    foreach code in array array(select generate_series(1,31) union all select generate_series(127,159)) loop
+      changed:=jsonb_set(visuals,'{0,description}',to_jsonb('before'||chr(code)||'after'));
+      if not pg_temp.visual_rejects(format('select daily_cs_private.validate_visuals(%L::jsonb)',changed)) then
+        failures:=array_append(failures,locale_name||': control accepted U+'||to_hex(code));
+      end if;
+    end loop;
+    foreach value in array array['Plain explanatory text.','JavaScript examples and data values.',
+      U&'data\200b:example',U&'javascript\180e:example',U&'one\00a0two'] loop
+      changed:=jsonb_set(visuals,'{0,description}',to_jsonb(value));
+      if pg_temp.visual_rejects(format('select daily_cs_private.validate_visuals(%L::jsonb)',changed)) then
+        failures:=array_append(failures,locale_name||': safe text rejected '||value);
+      end if;
+    end loop;
+  end loop;
+  execute original;
+  perform pg_temp.visual_assert(cardinality(failures)=0,array_to_string(failures,'; '));
+exception when others then
+  execute original;
+  raise;
+end $locale$;

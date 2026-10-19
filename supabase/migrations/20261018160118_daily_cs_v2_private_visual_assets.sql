@@ -68,7 +68,7 @@ create function daily_cs_private.visual_text(value jsonb, maximum integer, allow
 returns boolean language sql immutable set search_path = '' as $$
   select jsonb_typeof(value) = 'string' and length(value #>> '{}') <= maximum
     and (allow_empty or length(btrim(value #>> '{}',U&' \00a0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200a\2028\2029\202f\205f\3000\feff')) > 0)
-    and (value #>> '{}') !~* U&'</?[a-z][^>]*>|https?://|javascript[[:space:]\feff]*:|data[[:space:]\feff]*:|www\\.|```|[[:cntrl:]]'
+    and (value #>> '{}') !~* U&'</?[a-z][^>]*>|https?://|javascript[\0009\000a\000b\000c\000d \00a0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200a\2028\2029\202f\205f\3000\feff]*:|data[\0009\000a\000b\000c\000d \00a0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200a\2028\2029\202f\205f\3000\feff]*:|www\\.|```|[[:cntrl:]]'
 $$;
 create function daily_cs_private.visual_object(value jsonb, allowed text[], required text[])
 returns boolean language sql immutable set search_path = '' as $$
