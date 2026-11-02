@@ -13,7 +13,96 @@ const {
   writeImportEvidence,
 } = require('../scripts/import-lessons-preview');
 const { restoreBackup } = require('../scripts/restore-backup-preview');
-const { createOwnerApiClient, writeJsonAtomic, readJsonFile } = require('../scripts/lib/owner-api-client');
+const { createBackupApiClient, createOwnerApiClient, writeJsonAtomic, readJsonFile } = require('../scripts/lib/owner-api-client');
+
+function delayedResponse(t, delayMs) {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let signal;
+  t.mock.method(global, 'fetch', async (url, request) => {
+    signal = request.signal;
+    return {
+      status: 200,
+      text: () => new Promise((resolve, reject) => {
+        setTimeout(() => resolve(JSON.stringify({ data: { export: { hash: 'slow-server-hash', lessons: [] } } })), delayMs);
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      }),
+    };
+  });
+  return () => signal;
+}
+
+function configureBackupEnv(t) {
+  const names = ['DAILY_CS_BACKUP_API_URL', 'DAILY_CS_BACKUP_API_KEY'];
+  const previous = names.map((name) => process.env[name]);
+  process.env.DAILY_CS_BACKUP_API_URL = 'https://project.supabase.co/functions/v1/backup-api';
+  process.env.DAILY_CS_BACKUP_API_KEY = 'private-test-key-never-log';
+  t.after(() => names.forEach((name, index) => {
+    if (previous[index] === undefined) delete process.env[name];
+    else process.env[name] = previous[index];
+  }));
+}
+
+test('backup export completes a response body taking more than 30 seconds', async (t) => {
+  configureBackupEnv(t);
+  const signal = delayedResponse(t, 45000);
+  const completion = exportBackup().then((value) => ({ value }), (error) => ({ error }));
+  await Promise.resolve();
+  t.mock.timers.tick(30000);
+  assert.equal(signal().aborted, false);
+  t.mock.timers.tick(15000);
+  assert.deepEqual(await completion, { value: { hash: 'slow-server-hash' } });
+  t.mock.timers.tick(15000);
+  assert.equal(signal().aborted, false, 'successful export clears its deadline timer');
+});
+
+test('backup export aborts at 60 seconds with safe action and deadline context', async (t) => {
+  configureBackupEnv(t);
+  const signal = delayedResponse(t, 90000);
+  const completion = exportBackup().then((value) => ({ value }), (error) => ({ error }));
+  await Promise.resolve();
+  t.mock.timers.tick(59999);
+  assert.equal(signal().aborted, false);
+  t.mock.timers.tick(1);
+  const { error } = await completion;
+  assert.match(error.message, /backup\.export.*60000/);
+  assert.doesNotMatch(error.message, /private-test-key|https:|slow-server-hash/);
+  assert.equal(signal().aborted, true);
+});
+
+for (const action of ['owner.summary', 'backup.report']) {
+  test(`${action} retains its 30 second client deadline`, async (t) => {
+    const signal = delayedResponse(t, 45000);
+    const client = action === 'backup.report'
+      ? createBackupApiClient({ apiUrl: 'https://project.supabase.co/functions/v1/backup-api', token: 'private-test-key' })
+      : createOwnerApiClient({ apiUrl: 'https://project.supabase.co/functions/v1/owner-api', token: 'private-test-key' });
+    const completion = assert.rejects(client.request(action, {}), (error) => {
+      assert.ok(error.message.includes(action));
+      assert.match(error.message, /30000/);
+      assert.doesNotMatch(error.message, /private-test-key|https:/);
+      return true;
+    });
+    await Promise.resolve();
+    t.mock.timers.tick(29999);
+    assert.equal(signal().aborted, false);
+    t.mock.timers.tick(1);
+    await completion;
+    assert.equal(signal().aborted, true);
+  });
+}
+
+test('backup client preserves transport errors and clears the deadline after failure', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const failure = new TypeError('synthetic transport failure');
+  let signal;
+  t.mock.method(global, 'fetch', async (url, request) => {
+    signal = request.signal;
+    throw failure;
+  });
+  const client = createBackupApiClient({ apiUrl: 'https://project.supabase.co/functions/v1/backup-api', token: 'fake-key' });
+  await assert.rejects(client.request('backup.report', {}), (error) => error === failure);
+  t.mock.timers.tick(60000);
+  assert.equal(signal.aborted, false);
+});
 
 test('backup hash is stable for identical JSON payloads', () => {
   const payload = { lessons: [{ id: '001', title: 'Synthetic' }], settings: { startDate: '2026-09-15' } };

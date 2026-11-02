@@ -62,6 +62,11 @@ function createApiClient(config) {
         signal: controller.signal,
       });
       return parseResponse(action, response.status, await response.text());
+    } catch (error) {
+      if (controller.signal.aborted) {
+        throw new Error(`${action} timed out after ${timeoutMs} ms`);
+      }
+      throw error;
     } finally {
       clearTimeout(timeout);
     }
