@@ -9,7 +9,7 @@ function hashJson(value) {
 }
 
 async function exportBackup(options = {}) {
-  const client = options.client || createBackupApiClient({ timeoutMs: 60000, maxBodyBytes: options.maxBodyBytes });
+  const client = options.client || createBackupApiClient({ timeoutMs: 90000, maxBodyBytes: options.maxBodyBytes });
   const data = await client.request('backup.export', {});
   const exported = data && data.export ? data.export : data;
   if (!exported || typeof exported !== 'object') {
