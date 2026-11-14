@@ -42,12 +42,12 @@ function configureBackupEnv(t) {
   }));
 }
 
-test('backup export completes a response body taking more than 30 seconds', async (t) => {
+test('backup export completes a response body taking 75 seconds', async (t) => {
   configureBackupEnv(t);
-  const signal = delayedResponse(t, 45000);
+  const signal = delayedResponse(t, 75000);
   const completion = exportBackup().then((value) => ({ value }), (error) => ({ error }));
   await Promise.resolve();
-  t.mock.timers.tick(30000);
+  t.mock.timers.tick(60000);
   assert.equal(signal().aborted, false);
   t.mock.timers.tick(15000);
   assert.deepEqual(await completion, { value: { hash: 'slow-server-hash' } });
@@ -55,16 +55,16 @@ test('backup export completes a response body taking more than 30 seconds', asyn
   assert.equal(signal().aborted, false, 'successful export clears its deadline timer');
 });
 
-test('backup export aborts at 60 seconds with safe action and deadline context', async (t) => {
+test('backup export aborts at 90 seconds with safe action and deadline context', async (t) => {
   configureBackupEnv(t);
-  const signal = delayedResponse(t, 90000);
+  const signal = delayedResponse(t, 120000);
   const completion = exportBackup().then((value) => ({ value }), (error) => ({ error }));
   await Promise.resolve();
-  t.mock.timers.tick(59999);
+  t.mock.timers.tick(89999);
   assert.equal(signal().aborted, false);
   t.mock.timers.tick(1);
   const { error } = await completion;
-  assert.match(error.message, /backup\.export.*60000/);
+  assert.match(error.message, /backup\.export.*90000/);
   assert.doesNotMatch(error.message, /private-test-key|https:|slow-server-hash/);
   assert.equal(signal().aborted, true);
 });
